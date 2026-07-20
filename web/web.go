@@ -422,7 +422,26 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 
 	fileName := filepath.Base(filePath)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
-	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+
+	// Prepend UTF-8 BOM so Excel on Windows detects UTF-8 (avoid mojibake like SalÃ£o).
+	var bom [3]byte
+	n, _ := file.Read(bom[:])
+	hasBOM := n == 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF
+	if hasBOM {
+		if _, err := w.Write(bom[:]); err != nil {
+			http.Error(w, "Failed to send file", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		if n > 0 {
+			_, _ = file.Seek(0, io.SeekStart)
+		}
+		if _, err := w.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+			http.Error(w, "Failed to send file", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	_, err = io.Copy(w, file)
 	if err != nil {
