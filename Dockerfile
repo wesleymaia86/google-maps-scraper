@@ -20,7 +20,24 @@ RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
     && rm -rf /var/lib/apt/lists/* \
     && go install github.com/mxschmitt/playwright-go/cmd/playwright@${PLAYWRIGHT_GO_VERSION} \
     && mkdir -p /opt/browsers \
-    && playwright install chromium --with-deps
+    && playwright install chromium --with-deps \
+    # The scraping runtime pulls in playwright-community/playwright-go v0.6000.0
+    # transitively (via scrapemate), which requires Playwright driver v1.60.0.
+    # That version's legacy driver download (playwright.azureedge.net) now 404s,
+    # so every browser scrape fails with:
+    #   "could not install driver: driver exists but version not 1.60.0".
+    # The community fork cannot be bumped to a fixed release either: its v0.61xx
+    # tags redeclare the module path as github.com/mxschmitt/playwright-go, so Go
+    # rejects them under the community import path. Until scrapemate migrates,
+    # supply the exact driver the runtime validates against from npm (still
+    # served), then fetch the Chromium build v1.60.0 pins. The runtime only
+    # checks `node package/cli.js --version == 1.60.0` before launching.
+    && curl -fsSL https://registry.npmjs.org/playwright-core/-/playwright-core-1.60.0.tgz -o /tmp/pw-core.tgz \
+    && rm -rf /opt/ms-playwright-go/package \
+    && tar -xzf /tmp/pw-core.tgz -C /opt/ms-playwright-go \
+    && rm /tmp/pw-core.tgz \
+    && /opt/ms-playwright-go/node /opt/ms-playwright-go/package/cli.js --version | grep -q 1.60.0 \
+    && /opt/ms-playwright-go/node /opt/ms-playwright-go/package/cli.js install chromium
 
 # Build stage
 FROM golang:1.26.5-trixie AS builder
