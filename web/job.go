@@ -38,19 +38,19 @@ type Job struct {
 
 func (j *Job) Validate() error {
 	if j.ID == "" {
-		return errors.New("missing id")
+		return errors.New("id ausente")
 	}
 
 	if j.Name == "" {
-		return errors.New("missing name")
+		return errors.New("informe o nome do job")
 	}
 
 	if j.Status == "" {
-		return errors.New("missing status")
+		return errors.New("status ausente")
 	}
 
 	if j.Date.IsZero() {
-		return errors.New("missing date")
+		return errors.New("data ausente")
 	}
 
 	if err := j.Data.Validate(); err != nil {
@@ -73,31 +73,32 @@ type JobData struct {
 	ExtraReviews bool          `json:"extra_reviews"`
 	MaxTime      time.Duration `json:"max_time"`
 	Proxies      []string      `json:"proxies"`
+	ExcludeJobID string        `json:"exclude_job_id,omitempty"`
 }
 
 func (d *JobData) Validate() error {
 	if len(d.Keywords) == 0 {
-		return errors.New("missing keywords")
+		return errors.New("informe ao menos uma palavra-chave")
 	}
 
 	if d.Lang == "" {
-		return errors.New("missing lang")
+		return errors.New("informe o idioma")
 	}
 
 	if len(d.Lang) != 2 {
-		return errors.New("invalid lang")
+		return errors.New("idioma deve ter 2 letras (ex.: pt)")
 	}
 
 	if d.Depth == 0 {
-		return errors.New("missing depth")
+		return errors.New("informe a profundidade")
 	}
 
 	if d.MaxTime == 0 {
-		return errors.New("missing max time")
+		return errors.New("informe o tempo máximo")
 	}
 
 	if d.FastMode && (d.Lat == "" || d.Lon == "") {
-		return errors.New("missing geo coordinates")
+		return errors.New("modo rápido exige latitude e longitude")
 	}
 
 	return nil

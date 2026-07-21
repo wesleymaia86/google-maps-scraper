@@ -107,7 +107,7 @@ func New(svc *Service, addr string) (*Server, error) {
 		if r.Method != http.MethodGet {
 			ans := apiError{
 				Code:    http.StatusMethodNotAllowed,
-				Message: "Method not allowed",
+				Message: "Método não permitido",
 			}
 
 			renderJSON(w, http.StatusMethodNotAllowed, ans)
@@ -118,8 +118,16 @@ func New(svc *Service, addr string) (*Server, error) {
 		ans.download(w, r)
 	})
 
+	mux.HandleFunc("/api/v1/geocode", ans.apiGeocode)
+
 	handler := securityHeaders(mux)
 	ans.srv.Handler = handler
+
+	funcMap := template.FuncMap{
+		"statusLabel": statusLabel,
+		"formatDate":  formatDateBR,
+		"shortID":     shortID,
+	}
 
 	tmplsKeys := []string{
 		"static/templates/index.html",
@@ -129,7 +137,12 @@ func New(svc *Service, addr string) (*Server, error) {
 	}
 
 	for _, key := range tmplsKeys {
-		tmp, err := template.ParseFS(static, key)
+		raw, err := static.ReadFile(key)
+		if err != nil {
+			return nil, err
+		}
+
+		tmp, err := template.New(filepath.Base(key)).Funcs(funcMap).Parse(string(raw))
 		if err != nil {
 			return nil, err
 		}
@@ -165,18 +178,21 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 type formData struct {
-	Name     string
-	MaxTime  string
-	Keywords []string
-	Language string
-	Zoom     int
-	FastMode bool
-	Radius   int
-	Lat      string
-	Lon      string
-	Depth    int
-	Email    bool
-	Proxies  []string
+	Name          string
+	MaxTime       string
+	Keywords      []string
+	Language      string
+	Zoom          int
+	FastMode      bool
+	Radius        int
+	Lat           string
+	Lon           string
+	Depth         int
+	Email         bool
+	Proxies       []string
+	City          string
+	ExcludeJobID  string
+	CompletedJobs []Job
 }
 
 type ctxKey string
@@ -215,30 +231,33 @@ func (f formData) KeywordsString() string {
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
 
 		return
 	}
 
 	tmpl, ok := s.tmpl["static/templates/index.html"]
 	if !ok {
-		http.Error(w, "missing tpl", http.StatusInternalServerError)
+		http.Error(w, "template ausente", http.StatusInternalServerError)
 
 		return
 	}
 
+	completed, _ := s.svc.SelectOK(r.Context())
+
 	data := formData{
-		Name:     "",
-		MaxTime:  "10m",
-		Keywords: []string{},
-		Language: "en",
-		Zoom:     15,
-		FastMode: false,
-		Radius:   10000,
-		Lat:      "0",
-		Lon:      "0",
-		Depth:    10,
-		Email:    false,
+		Name:          "",
+		MaxTime:       "10m",
+		Keywords:      []string{},
+		Language:      "pt",
+		Zoom:          15,
+		FastMode:      false,
+		Radius:        10000,
+		Lat:           "",
+		Lon:           "",
+		Depth:         10,
+		Email:         false,
+		CompletedJobs: completed,
 	}
 
 	_ = tmpl.Execute(w, data)
@@ -246,7 +265,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
 
 		return
 	}
@@ -270,13 +289,13 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 
 	maxTime, err := time.ParseDuration(maxTimeStr)
 	if err != nil {
-		http.Error(w, "invalid max time", http.StatusUnprocessableEntity)
+		http.Error(w, "tempo máximo inválido (ex.: 10m)", http.StatusUnprocessableEntity)
 
 		return
 	}
 
 	if maxTime < time.Minute*3 {
-		http.Error(w, "max time must be more than 3m", http.StatusUnprocessableEntity)
+		http.Error(w, "o tempo máximo deve ser de pelo menos 3m", http.StatusUnprocessableEntity)
 
 		return
 	}
@@ -285,7 +304,7 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 
 	keywordsStr, ok := r.Form["keywords"]
 	if !ok {
-		http.Error(w, "missing keywords", http.StatusUnprocessableEntity)
+		http.Error(w, "informe as palavras-chave", http.StatusUnprocessableEntity)
 
 		return
 	}
@@ -304,7 +323,7 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 
 	newJob.Data.Zoom, err = strconv.Atoi(r.Form.Get("zoom"))
 	if err != nil {
-		http.Error(w, "invalid zoom", http.StatusUnprocessableEntity)
+		http.Error(w, "zoom inválido", http.StatusUnprocessableEntity)
 
 		return
 	}
@@ -315,22 +334,23 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 
 	newJob.Data.Radius, err = strconv.Atoi(r.Form.Get("radius"))
 	if err != nil {
-		http.Error(w, "invalid radius", http.StatusUnprocessableEntity)
+		http.Error(w, "raio inválido", http.StatusUnprocessableEntity)
 
 		return
 	}
 
-	newJob.Data.Lat = r.Form.Get("latitude")
-	newJob.Data.Lon = r.Form.Get("longitude")
+	newJob.Data.Lat = strings.TrimSpace(r.Form.Get("latitude"))
+	newJob.Data.Lon = strings.TrimSpace(r.Form.Get("longitude"))
 
 	newJob.Data.Depth, err = strconv.Atoi(r.Form.Get("depth"))
 	if err != nil {
-		http.Error(w, "invalid depth", http.StatusUnprocessableEntity)
+		http.Error(w, "profundidade inválida", http.StatusUnprocessableEntity)
 
 		return
 	}
 
 	newJob.Data.Email = r.Form.Get("email") == "on"
+	newJob.Data.ExcludeJobID = strings.TrimSpace(r.Form.Get("exclude_job_id"))
 
 	proxies := strings.Split(r.Form.Get("proxies"), "\n")
 	if len(proxies) > 0 {
@@ -360,7 +380,7 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 
 	tmpl, ok := s.tmpl["static/templates/job_row.html"]
 	if !ok {
-		http.Error(w, "missing tpl", http.StatusInternalServerError)
+		http.Error(w, "template ausente", http.StatusInternalServerError)
 
 		return
 	}
@@ -393,7 +413,7 @@ func (s *Server) getJobs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
 
 		return
 	}
@@ -402,7 +422,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 
 	id, ok := getIDFromRequest(r)
 	if !ok {
-		http.Error(w, "Invalid ID", http.StatusUnprocessableEntity)
+		http.Error(w, "ID inválido", http.StatusUnprocessableEntity)
 
 		return
 	}
@@ -415,13 +435,17 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		http.Error(w, "Failed to open file", http.StatusInternalServerError)
+		http.Error(w, "Falha ao abrir o arquivo", http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
 
-	fileName := filepath.Base(filePath)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
+	downloadName := id.String() + ".csv"
+	if job, err := s.svc.Get(ctx, id.String()); err == nil {
+		downloadName = SanitizeDownloadName(job.Name)
+	}
+
+	w.Header().Set("Content-Disposition", ContentDispositionAttachment(downloadName))
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 
 	// Prepend UTF-8 BOM so Excel on Windows detects UTF-8 (avoid mojibake like SalÃ£o).
@@ -430,7 +454,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	hasBOM := n == 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF
 	if hasBOM {
 		if _, err := w.Write(bom[:]); err != nil {
-			http.Error(w, "Failed to send file", http.StatusInternalServerError)
+			http.Error(w, "Falha ao enviar o arquivo", http.StatusInternalServerError)
 			return
 		}
 	} else {
@@ -438,14 +462,14 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 			_, _ = file.Seek(0, io.SeekStart)
 		}
 		if _, err := w.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
-			http.Error(w, "Failed to send file", http.StatusInternalServerError)
+			http.Error(w, "Falha ao enviar o arquivo", http.StatusInternalServerError)
 			return
 		}
 	}
 
 	_, err = io.Copy(w, file)
 	if err != nil {
-		http.Error(w, "Failed to send file", http.StatusInternalServerError)
+		http.Error(w, "Falha ao enviar o arquivo", http.StatusInternalServerError)
 		return
 	}
 }
@@ -636,7 +660,34 @@ func renderJSON(w http.ResponseWriter, code int, data any) {
 }
 
 func formatDate(t time.Time) string {
-	return t.Format("Jan 02, 2006 15:04:05")
+	return formatDateBR(t)
+}
+
+func formatDateBR(t time.Time) string {
+	return t.Local().Format("02/01/2006 15:04")
+}
+
+func statusLabel(status string) string {
+	switch status {
+	case StatusPending:
+		return "Pendente"
+	case StatusWorking:
+		return "Em andamento"
+	case StatusOK:
+		return "Concluído"
+	case StatusFailed:
+		return "Falhou"
+	default:
+		return status
+	}
+}
+
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+
+	return id[:8]
 }
 
 func securityHeaders(next http.Handler) http.Handler {

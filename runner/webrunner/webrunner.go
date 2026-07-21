@@ -28,7 +28,7 @@ type webrunner struct {
 	srv       *web.Server
 	svc       *web.Service
 	cfg       *runner.Config
-	setupMate func(context.Context, io.Writer, *web.Job) (mateRunner, error)
+	setupMate func(context.Context, io.Writer, *web.Job, map[string]struct{}) (mateRunner, error)
 }
 
 type mateRunner interface {
@@ -162,12 +162,26 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 		_ = outfile.Close()
 	}()
 
+	excludeIDs := map[string]struct{}{}
+	if job.Data.ExcludeJobID != "" {
+		excludeIDs, err = w.svc.LoadPlaceIDsFromJobCSV(job.Data.ExcludeJobID)
+		if err != nil {
+			job.Status = web.StatusFailed
+
+			_ = w.svc.Update(ctx, job)
+
+			return fmt.Errorf("falha ao carregar leads para exclusão: %w", err)
+		}
+
+		log.Printf("job %s will exclude %d place_ids from job %s", job.ID, len(excludeIDs), job.Data.ExcludeJobID)
+	}
+
 	setupMate := w.setupMate
 	if setupMate == nil {
 		setupMate = defaultSetupMate(w.cfg)
 	}
 
-	mate, err := setupMate(ctx, outfile, job)
+	mate, err := setupMate(ctx, outfile, job, excludeIDs)
 	if err != nil {
 		job.Status = web.StatusFailed
 
@@ -259,8 +273,8 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 	return w.svc.Update(ctx, job)
 }
 
-func defaultSetupMate(cfg *runner.Config) func(context.Context, io.Writer, *web.Job) (mateRunner, error) {
-	return func(_ context.Context, writer io.Writer, job *web.Job) (mateRunner, error) {
+func defaultSetupMate(cfg *runner.Config) func(context.Context, io.Writer, *web.Job, map[string]struct{}) (mateRunner, error) {
+	return func(_ context.Context, writer io.Writer, job *web.Job, excludeIDs map[string]struct{}) (mateRunner, error) {
 		opts := []func(*scrapemateapp.Config) error{
 			scrapemateapp.WithConcurrency(cfg.Concurrency),
 			scrapemateapp.WithExitOnInactivity(time.Minute * 3),
@@ -301,7 +315,12 @@ func defaultSetupMate(cfg *runner.Config) func(context.Context, io.Writer, *web.
 
 		csvWriter := csvwriter.NewCsvWriter(csv.NewWriter(writer))
 
-		writers := []scrapemate.ResultWriter{csvWriter}
+		var resultWriter scrapemate.ResultWriter = csvWriter
+		if len(excludeIDs) > 0 {
+			resultWriter = newExcludeWriter(csvWriter, excludeIDs)
+		}
+
+		writers := []scrapemate.ResultWriter{resultWriter}
 
 		matecfg, err := scrapemateapp.NewConfig(
 			writers,

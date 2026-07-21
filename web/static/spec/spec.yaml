@@ -157,6 +157,39 @@ paths:
         '500':
           description: Internal server error
 
+  /api/v1/geocode:
+    get:
+      summary: Geocode city/place via latlng.work (server-side proxy)
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: City, neighborhood or address (Brazil bias applied)
+      responses:
+        '200':
+          description: First matching location
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  lat:
+                    type: number
+                  lon:
+                    type: number
+                  display:
+                    type: string
+        '404':
+          description: No results
+        '422':
+          description: Missing query
+        '503':
+          description: LATLNG_API_KEY not configured
+
 components:
   schemas:
     ApiError:
@@ -198,6 +231,9 @@ components:
           type: array
           items:
             type: string
+        exclude_job_id:
+          type: string
+          description: Optional completed job UUID whose place_ids should be excluded
 
     ApiScrapeResponse:
       type: object
@@ -249,4 +285,7 @@ components:
           type: array
           items:
             type: string
+        exclude_job_id:
+          type: string
+          description: Optional completed job UUID whose place_ids should be excluded
 
