@@ -72,7 +72,6 @@ func (s *Server) apiGeocode(w http.ResponseWriter, r *http.Request) {
 	endpoint := "https://api.latlng.work/api?" + url.Values{
 		"q":     {q},
 		"limit": {"5"},
-		"lang":  {"pt"},
 	}.Encode()
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint, nil)
